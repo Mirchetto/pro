@@ -1,0 +1,93 @@
+👉 Schema che useremo:
+
+Ogni 30–60 secondi, l’app farà una richiesta ai feed news di Finnhub (gratuito) → se non risponde o supera i limiti → passa automaticamente a Polygon (free tier).
+
+Lato prezzi e volumi: useremo Finnhub (gratuito e più stabile) per i quote aggiornati.
+
+Nessun websocket (che richiede piani pro): faremo polling asincrono (richieste periodiche), quindi 100% gratuito.
+
+L’app monitorerà comunque ogni ticker per 5 minuti come da tua logica, ma usando snapshot ogni 10 secondi.
+
+
+Così:
+
+zero costi,
+
+nessun limite superato,
+
+notizie quasi real time (ritardo max 1 min),
+
+nessuna chiave premium necessaria.
+
+
+
+---
+
+Ora ti propongo la struttura di base del progetto 👇
+
+🧩 Architettura
+
+stock-boom-app/
+│
+├── main.py                # Avvio app e GUI
+├── core/
+│   ├── news_fetcher.py    # Modulo per news (Finnhub → Polygon fallback)
+│   ├── market_monitor.py  # Gestisce controlli prezzo/volume
+│   ├── notifier.py        # Invia notifiche (desktop e Telegram)
+│   ├── storage.py         # Database locale (SQLite)
+│   └── sentiment.py       # Analisi del sentiment (FinBERT light)
+│
+├── ui/
+│   ├── dashboard.ui       # Interfaccia principale
+│   ├── ticker_detail.ui   # Finestra dettaglio
+│   └── icons/
+│
+└── config.json            # Impostazioni (API keys, parametri, frequenze)
+
+
+---
+
+🧠 Logica operativa semplificata
+
+1. Ogni 30 secondi → news_fetcher prende ultime news → estrae ticker.
+
+
+2. Se ticker non è in watchlist → aggiunge e salva prezzo e volume attuali.
+
+
+3. Per 5 minuti → market_monitor controlla variazioni e volume.
+
+
+4. Se price >= +3% e volume >= 1.5× media → invia notifica e sposta in “Boom”.
+
+
+5. “Boom” viene aggiornato ogni minuto con news, prezzo e sentiment.
+
+
+6. Clic su ticker → apre finestra con grafico, news e sentiment cumulato.
+
+
+
+
+---
+
+🪄 Interfaccia
+
+Uso Flet per 3 motivi:
+
+È moderna e cross-platform (funziona su desktop, web e mobile).
+
+Ha una GUI elegante senza dover creare file .ui.
+
+Si compila in .exe (Windows) o .app (Mac) con PyInstaller facilmente.
+
+
+
+---
+
+🔔 Notifiche
+
+Desktop (notifica nativa).
+
+Telegram (usando il bot che hai già).
+Ti basta inserire TELEGRAM_TOKEN e CHAT_ID in config.json.
