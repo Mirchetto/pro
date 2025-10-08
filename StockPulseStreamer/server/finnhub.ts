@@ -157,41 +157,54 @@ class FinancialDataClient {
   }
 
   async getNews(limit: number = 50): Promise<Partial<News>[]> {
-    if (this.useFinnhub && this.finnhubKey) {
+    if (this.polygonKey) {
       try {
-        const response = await fetch(
-          `${FINNHUB_BASE_URL}/news?category=general&token=${this.finnhubKey}`
-        );
-
-        if (!response.ok) {
-          throw new Error(`Finnhub news error: ${response.status}`);
+        const news = await this.getNewsFromPolygon(limit);
+        if (news.length > 0) {
+          return news;
         }
-
-        const data: FinnhubNews[] = await response.json();
-        
-        return data.slice(0, limit).map(article => ({
-          headline: article.headline,
-          summary: article.summary,
-          source: article.source,
-          url: article.url,
-          publishedAt: new Date(article.datetime * 1000),
-          tickers: article.related ? [article.related] : [],
-          category: article.category,
-          image: article.image,
-        }));
+        throw new Error("Polygon returned no news");
       } catch (error) {
-        console.error("Finnhub news error:", error);
-        // Fallback to Polygon
-        if (this.polygonKey) {
-          return this.getNewsFromPolygon(limit);
+        console.error("Polygon news error:", error);
+        if (this.finnhubKey) {
+          console.log("⚠️ Falling back to Finnhub for news");
+          return this.getNewsFromFinnhub(limit);
         }
         return [];
       }
-    } else if (this.polygonKey) {
-      return this.getNewsFromPolygon(limit);
+    } else if (this.finnhubKey) {
+      return this.getNewsFromFinnhub(limit);
     }
 
     return [];
+  }
+
+  private async getNewsFromFinnhub(limit: number = 50): Promise<Partial<News>[]> {
+    try {
+      const response = await fetch(
+        `${FINNHUB_BASE_URL}/news?category=general&token=${this.finnhubKey}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Finnhub news error: ${response.status}`);
+      }
+
+      const data: FinnhubNews[] = await response.json();
+
+      return data.slice(0, limit).map(article => ({
+        headline: article.headline,
+        summary: article.summary,
+        source: article.source,
+        url: article.url,
+        publishedAt: new Date(article.datetime * 1000),
+        tickers: article.related ? [article.related] : [],
+        category: article.category,
+        image: article.image,
+      }));
+    } catch (error) {
+      console.error("Finnhub news error:", error);
+      return [];
+    }
   }
 
   private async getNewsFromPolygon(limit: number = 50): Promise<Partial<News>[]> {

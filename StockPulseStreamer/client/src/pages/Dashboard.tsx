@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,92 +8,41 @@ import BoomCard from "@/components/BoomCard";
 import NewsCard from "@/components/NewsCard";
 import TickerDetailModal from "@/components/TickerDetailModal";
 import { Zap, Activity } from "lucide-react";
-
-// todo: remove mock functionality
-const mockWatchlist = [
-  { ticker: "AAPL", price: 178.45, change: 2.3, volume: 52000000, volumeMultiplier: 1.2, lastUpdate: new Date(Date.now() - 30000) },
-  { ticker: "TSLA", price: 242.84, change: 4.7, volume: 98000000, volumeMultiplier: 1.8, lastUpdate: new Date(Date.now() - 45000) },
-  { ticker: "NVDA", price: 495.22, change: -1.2, volume: 41000000, volumeMultiplier: 0.9, lastUpdate: new Date(Date.now() - 60000) },
-];
-
-const mockBoomStocks = [
-  { ticker: "GME", price: 24.50, change: 8.5, volumeMultiplier: 3.2 },
-  { ticker: "AMC", price: 6.85, change: 5.2, volumeMultiplier: 2.4 },
-];
-
-interface NewsItem {
-  title: string;
-  source: string;
-  timestamp: Date;
-  tickers: string[];
-  sentiment: "positive" | "negative" | "neutral";
-}
-
-const initialNews: NewsItem[] = [
-  {
-    title: "Tech stocks rally on strong earnings reports",
-    source: "Reuters",
-    timestamp: new Date(Date.now() - 300000),
-    tickers: ["AAPL", "MSFT", "GOOGL"],
-    sentiment: "positive",
-  },
-  {
-    title: "Federal Reserve announces interest rate decision",
-    source: "Bloomberg",
-    timestamp: new Date(Date.now() - 600000),
-    tickers: ["SPY", "QQQ"],
-    sentiment: "neutral",
-  },
-];
-
-const mockChartData = Array.from({ length: 30 }, (_, i) => ({
-  time: `${i}:00`,
-  price: 24.5 + Math.random() * 2 - 1,
-}));
+import { useStocks, useBoomStocks, useNews, useNewsByTicker, usePriceHistory, useStatus } from "@/hooks/useStocks";
+import type { Stock, BoomStock, News } from "@shared/schema";
 
 export default function Dashboard() {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-  const [status, setStatus] = useState<"active" | "connecting" | "disconnected">("active");
-  const [news, setNews] = useState<NewsItem[]>(initialNews);
-  const [newNewsIds, setNewNewsIds] = useState<Set<number>>(new Set());
+  const [newNewsIds, setNewNewsIds] = useState<Set<string>>(new Set());
+  const previousNewsCount = useRef(0);
 
-  // Simulate news arriving in real-time
+  const { data: stocks = [], isLoading: stocksLoading } = useStocks();
+  const { data: boomStocks = [], isLoading: boomLoading } = useBoomStocks();
+  const { data: newsData = [], isLoading: newsLoading } = useNews(50);
+  const { data: tickerNews = [] } = useNewsByTicker(selectedTicker || "");
+  const { data: priceHistory = [] } = usePriceHistory(selectedTicker || "", 100);
+  const { data: systemStatus } = useStatus();
+
+  const status: "active" | "connecting" | "disconnected" =
+    systemStatus?.newsFetcher.isRunning && systemStatus?.marketMonitor.isRunning
+      ? "active"
+      : "disconnected";
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      const sentiments: ("positive" | "negative" | "neutral")[] = ["positive", "negative", "neutral"];
-      const newNews = {
-        title: `Breaking: Market update at ${new Date().toLocaleTimeString()}`,
-        source: ["Reuters", "Bloomberg", "CNBC"][Math.floor(Math.random() * 3)],
-        timestamp: new Date(),
-        tickers: [["AAPL", "TSLA"], ["GME", "AMC"], ["NVDA", "AMD"]][Math.floor(Math.random() * 3)],
-        sentiment: sentiments[Math.floor(Math.random() * 3)],
-      };
-      
-      setNews(prev => {
-        const updated = [newNews, ...prev];
-        const newsId = Date.now();
-        setNewNewsIds(prev => new Set([...Array.from(prev), newsId]));
-        
-        // Remove "new" indicator after 5 seconds
-        setTimeout(() => {
-          setNewNewsIds(prev => {
-            const next = new Set(Array.from(prev));
-            next.delete(newsId);
-            return next;
-          });
-        }, 5000);
-        
-        return updated.slice(0, 10); // Keep only last 10 news
-      });
-    }, 8000); // New news every 8 seconds
+    if (newsData.length > previousNewsCount.current && previousNewsCount.current > 0) {
+      const newCount = newsData.length - previousNewsCount.current;
+      const newIds = newsData.slice(0, newCount).map(n => n.id);
+      setNewNewsIds(new Set(newIds));
 
-    return () => clearInterval(interval);
-  }, []);
+      setTimeout(() => {
+        setNewNewsIds(new Set());
+      }, 5000);
+    }
+    previousNewsCount.current = newsData.length;
+  }, [newsData.length]);
 
   const handleRefresh = () => {
-    console.log("Refresh triggered");
-    setStatus("connecting");
-    setTimeout(() => setStatus("active"), 1000);
+    window.location.reload();
   };
 
   const handleSettings = () => {
@@ -105,7 +54,32 @@ export default function Dashboard() {
     setSelectedTicker(ticker);
   };
 
-  const selectedStock = selectedTicker === "GME" ? mockBoomStocks[0] : mockWatchlist[0];
+  const selectedStock = boomStocks.find(b => b.symbol === selectedTicker) || stocks.find(s => s.symbol === selectedTicker);
+
+  const watchlistItems = stocks.map(stock => ({
+    ticker: stock.symbol,
+    price: stock.currentPrice || 0,
+    change: stock.previousClose && stock.currentPrice
+      ? ((stock.currentPrice - stock.previousClose) / stock.previousClose) * 100
+      : 0,
+    volume: stock.volume || 0,
+    volumeMultiplier: stock.avgVolume && stock.volume
+      ? stock.volume / stock.avgVolume
+      : 0,
+    lastUpdate: new Date(stock.addedAt),
+  }));
+
+  const boomItems = boomStocks.map(boom => ({
+    ticker: boom.symbol,
+    price: boom.currentPrice,
+    change: boom.priceChange,
+    volumeMultiplier: boom.volumeRatio,
+  }));
+
+  const chartData = priceHistory.map((p, i) => ({
+    time: new Date(p.timestamp).toLocaleTimeString(),
+    price: p.price,
+  })).reverse();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
@@ -113,7 +87,7 @@ export default function Dashboard() {
         status={status}
         onRefresh={handleRefresh}
         onSettings={handleSettings}
-        alertCount={mockBoomStocks.length}
+        alertCount={boomItems.length}
       />
 
       <main className="container mx-auto px-4 py-6 space-y-6">
@@ -127,9 +101,9 @@ export default function Dashboard() {
             <TabsTrigger value="boom" data-testid="tab-boom">
               <Zap className="h-4 w-4 mr-2" />
               Boom Stocks
-              {mockBoomStocks.length > 0 && (
+              {boomItems.length > 0 && (
                 <Badge className="ml-2 bg-warning text-warning-foreground border-0">
-                  {mockBoomStocks.length}
+                  {boomItems.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -140,18 +114,18 @@ export default function Dashboard() {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6 mt-6">
-            {mockBoomStocks.length > 0 && (
+            {boomItems.length > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Zap className="h-5 w-5 text-warning" />
                   <h2 className="text-xl font-bold">Boom Alerts</h2>
                   <Badge className="bg-warning/20 text-warning border-warning/30">
-                    {mockBoomStocks.length} Active
+                    {boomItems.length} Active
                   </Badge>
                 </div>
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                  {mockBoomStocks.map((stock, index) => (
-                    <BoomCard 
+                  {boomItems.map((stock, index) => (
+                    <BoomCard
                       key={stock.ticker}
                       {...stock}
                       isNew={index === 0}
@@ -167,11 +141,17 @@ export default function Dashboard() {
                 <CardTitle className="flex items-center gap-2">
                   <Activity className="h-5 w-5" />
                   Active Watchlist
-                  <Badge variant="outline">{mockWatchlist.length}</Badge>
+                  <Badge variant="outline">{watchlistItems.length}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <WatchlistTable items={mockWatchlist} onTickerClick={handleTickerClick} />
+                {stocksLoading ? (
+                  <div className="text-center py-8 text-muted-foreground">Loading...</div>
+                ) : watchlistItems.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">No stocks in watchlist. Waiting for news...</div>
+                ) : (
+                  <WatchlistTable items={watchlistItems} onTickerClick={handleTickerClick} />
+                )}
               </CardContent>
             </Card>
 
@@ -183,13 +163,24 @@ export default function Dashboard() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {news.slice(0, 3).map((newsItem, index) => (
-                  <NewsCard 
-                    key={index} 
-                    {...newsItem} 
-                    isNew={index === 0 && newNewsIds.size > 0}
-                  />
-                ))}
+                {newsLoading ? (
+                  <div className="text-center py-8 text-muted-foreground">Loading news...</div>
+                ) : newsData.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">No news available</div>
+                ) : (
+                  newsData.slice(0, 3).map((newsItem) => (
+                    <NewsCard
+                      key={newsItem.id}
+                      title={newsItem.headline}
+                      source={newsItem.source}
+                      timestamp={new Date(newsItem.publishedAt)}
+                      tickers={newsItem.tickers || []}
+                      url={newsItem.url}
+                      sentiment="neutral"
+                      isNew={newNewsIds.has(newsItem.id)}
+                    />
+                  ))
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -199,57 +190,87 @@ export default function Dashboard() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   Active Watchlist
-                  <Badge variant="outline">{mockWatchlist.length}</Badge>
+                  <Badge variant="outline">{watchlistItems.length}</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <WatchlistTable items={mockWatchlist} onTickerClick={handleTickerClick} />
+                {stocksLoading ? (
+                  <div className="text-center py-8 text-muted-foreground">Loading...</div>
+                ) : watchlistItems.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">No stocks in watchlist. Waiting for news...</div>
+                ) : (
+                  <WatchlistTable items={watchlistItems} onTickerClick={handleTickerClick} />
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="boom" className="mt-6">
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {mockBoomStocks.map((stock, index) => (
-                <BoomCard 
-                  key={stock.ticker}
-                  {...stock}
-                  isNew={index === 0}
-                  onViewDetails={() => handleTickerClick(stock.ticker)}
-                />
-              ))}
-            </div>
+            {boomLoading ? (
+              <div className="text-center py-8 text-muted-foreground">Loading...</div>
+            ) : boomItems.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">No boom stocks detected yet</div>
+            ) : (
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {boomItems.map((stock, index) => (
+                  <BoomCard
+                    key={stock.ticker}
+                    {...stock}
+                    isNew={index === 0}
+                    onViewDetails={() => handleTickerClick(stock.ticker)}
+                  />
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="news" className="mt-6">
-            <div className="max-w-4xl space-y-3">
-              {news.map((newsItem, index) => (
-                <NewsCard 
-                  key={index} 
-                  {...newsItem} 
-                  isNew={index === 0 && newNewsIds.size > 0}
-                />
-              ))}
-            </div>
+            {newsLoading ? (
+              <div className="text-center py-8 text-muted-foreground">Loading news...</div>
+            ) : newsData.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">No news available</div>
+            ) : (
+              <div className="max-w-4xl space-y-3">
+                {newsData.map((newsItem) => (
+                  <NewsCard
+                    key={newsItem.id}
+                    title={newsItem.headline}
+                    source={newsItem.source}
+                    timestamp={new Date(newsItem.publishedAt)}
+                    tickers={newsItem.tickers || []}
+                    url={newsItem.url}
+                    sentiment="neutral"
+                    isNew={newNewsIds.has(newsItem.id)}
+                  />
+                ))}
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </main>
 
-      {selectedTicker && (
+      {selectedTicker && selectedStock && (
         <TickerDetailModal
           open={!!selectedTicker}
           onOpenChange={(open) => !open && setSelectedTicker(null)}
           ticker={selectedTicker}
-          price={selectedStock.price}
-          change={selectedStock.change}
-          chartData={mockChartData}
-          news={news}
+          price={(selectedStock as any).currentPrice || (selectedStock as any).price || 0}
+          change={(selectedStock as any).priceChange || ((selectedStock as any).currentPrice && (selectedStock as any).previousClose ? (((selectedStock as any).currentPrice - (selectedStock as any).previousClose) / (selectedStock as any).previousClose) * 100 : 0)}
+          chartData={chartData.length > 0 ? chartData : [{ time: "0:00", price: 0 }]}
+          news={tickerNews.map(n => ({
+            title: n.headline,
+            source: n.source,
+            timestamp: new Date(n.publishedAt),
+            tickers: n.tickers || [],
+            sentiment: "neutral" as const,
+            url: n.url,
+          }))}
           stats={{
-            volume: 98000000,
-            volumeMultiplier: selectedStock.volumeMultiplier,
-            high: selectedStock.price * 1.05,
-            low: selectedStock.price * 0.95,
-            open: selectedStock.price * 0.98,
+            volume: (selectedStock as any).volume || 0,
+            volumeMultiplier: (selectedStock as any).volumeRatio || (selectedStock as any).volumeMultiplier || 0,
+            high: ((selectedStock as any).currentPrice || (selectedStock as any).price || 0) * 1.05,
+            low: ((selectedStock as any).currentPrice || (selectedStock as any).price || 0) * 0.95,
+            open: ((selectedStock as any).currentPrice || (selectedStock as any).price || 0) * 0.98,
           }}
         />
       )}
